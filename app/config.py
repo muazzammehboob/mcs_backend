@@ -3,13 +3,14 @@
 from pydantic_settings import BaseSettings
 
 
+import os
+
 class Settings(BaseSettings):
     """Application settings loaded from environment."""
 
-    # In-memory SQLite: works out of the box on Vercel serverless (no disk writes).
-    # For local dev with persistence, override with:
-    #   MCS_DATABASE_URL=sqlite+aiosqlite:///./mcs.db
-    database_url: str = "sqlite+aiosqlite:///:memory:"
+    # On Vercel, use /tmp/mcs.db to persist state per-instance (mitigates multi-worker data loss).
+    # Locally, use a local file for persistence.
+    database_url: str = "sqlite+aiosqlite:////tmp/mcs.db" if os.getenv("VERCEL") else "sqlite+aiosqlite:///mcs.db"
 
     # Comma-separated list of allowed CORS origins.
     # Set MCS_ALLOWED_ORIGINS in the Vercel dashboard to include your frontend domain.

@@ -63,7 +63,7 @@ async def test_streaming_success(client: AsyncClient, db_session: AsyncSession) 
             headers = {"X-Gemini-Api-Key": "mock-api-key"}
             response = await client.post(
                 f"/branches/{branch_id}/messages",
-                json={"prompt_text": "hi", "model": "gemini-2.5-flash"},
+                json={"prompt_text": "hi", "model": "gemini-2.5-flash", "api_key": "mock-api-key"},
                 headers=headers,
             )
             assert response.status_code == 200
@@ -133,7 +133,7 @@ async def test_streaming_fallback(client: AsyncClient, db_session: AsyncSession)
             headers = {"X-Gemini-Api-Key": "mock-api-key"}
             response = await client.post(
                 f"/branches/{branch_id}/messages",
-                json={"prompt_text": "hi", "model": "claude-3-5-sonnet-20241022"},
+                json={"prompt_text": "hi", "model": "claude-3-5-sonnet-20241022", "api_key": "mock-api-key"},
                 headers=headers,
             )
             assert response.status_code == 200

@@ -193,6 +193,8 @@ async def test_dump_graph(client: AsyncClient, db_session: AsyncSession) -> None
     
     app.dependency_overrides[get_db] = lambda: db_session
     response = await client.get(f"/graph/project/{p_id}")
-    with open("../frontend_3/docs/sample-graph-response.json", "w") as f:
-        json.dump(response.json(), f, indent=2)
-
+    data = response.json()
+    out_path = Path(__file__).parent.parent.parent.parent / "mcs-frontend" / "docs" / "sample-graph-response.json"
+    if out_path.parent.exists():
+        with open(out_path, "w") as f:
+            json.dump(data, f, indent=2)

@@ -8,7 +8,7 @@ import respx
 from httpx import Response
 
 from app.providers.base import Message
-from app.providers.gemini_provider import GeminiProvider
+from app.providers.gemini import GeminiProvider
 from app.providers.exceptions import GeminiAPIError, GeminiSafetyBlockError
 
 
