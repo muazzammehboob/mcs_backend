@@ -581,3 +581,192 @@ async def send_message(
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/{branch_id}/messages/sync")
+async def send_message_sync(
+    branch_id: int,
+    body: SendMessageRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Non-streaming variant of send_message.
+
+    Accumulates the full LLM response before returning a single JSON object.
+    Use this on Vercel Hobby (10-second function timeout) where SSE streaming
+    is impractical.  The frontend sets NEXT_PUBLIC_STREAMING=false to route
+    here automatically.
+
+    Returns the same shape as the ``done`` SSE event so the frontend can handle
+    both paths with a single response handler.
+    """
+    api_key = body.api_key
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing required api_key in request body",
+        )
+
+    # 1. Load branch and project
+    result = await db.execute(
+        select(BranchModel)
+        .where(BranchModel.id == branch_id)
+        .options(selectinload(BranchModel.project))
+    )
+    branch = result.scalar_one_or_none()
+    if not branch:
+        raise _branch_not_found()
+
+    project = branch.project
+
+    # 2. Get lineage pairs
+    branches_res = await db.execute(select(BranchModel).where(BranchModel.project_id == project.id))
+    all_branches = branches_res.scalars().all()
+    pairs_res = await db.execute(
+        select(PRPairModel).join(BranchModel, PRPairModel.branch_id == BranchModel.id).where(BranchModel.project_id == project.id)
+    )
+    all_pairs = pairs_res.scalars().all()
+
+    domain_branches = [
+        LineageBranch(
+            id=b.id, project_id=b.project_id, parent_branch_id=b.parent_branch_id,
+            parent_pr_pair_id=b.parent_pr_pair_id, type=b.type, label=b.label,
+            cached_static_token_count=b.cached_static_token_count,
+            linked_summary_node_id=b.linked_summary_node_id,
+            summary_cutoff_position=b.summary_cutoff_position, created_at=b.created_at
+        ) for b in all_branches
+    ]
+    domain_pairs = [
+        LineagePair(
+            id=p.id, branch_id=p.branch_id, prompt_text=p.prompt_text,
+            response_text=p.response_text, generation_params=p.generation_params,
+            created_at=p.created_at
+        ) for p in all_pairs if p.response_text is not None
+    ]
+
+    target_domain_branch = next((b for b in domain_branches if b.id == branch_id), None)
+    if target_domain_branch is None:
+        raise _branch_not_found()
+    lineage_pairs = assemble_lineage(target_domain_branch, domain_pairs, domain_branches)
+
+    # 3. Build system prompt
+    system_parts = []
+    if project.persona:
+        system_parts.append(project.persona)
+    if project.instructions:
+        system_parts.append(project.instructions)
+    if project.negative_constraints:
+        system_parts.append(project.negative_constraints)
+
+    if branch.linked_summary_node_id is not None:
+        summary_res = await db.execute(select(NodeModel).where(NodeModel.id == branch.linked_summary_node_id))
+        summary_node = summary_res.scalar_one_or_none()
+        if summary_node:
+            system_parts.append(f"Summary of previous conversation:\n{summary_node.content}")
+
+    if branch.summary_cutoff_position is not None:
+        lineage_pairs = lineage_pairs[branch.summary_cutoff_position:]
+
+    messages = []
+    for pair in lineage_pairs:
+        messages.append(Message(role="user", content=pair.prompt_text))
+        messages.append(Message(role="assistant", content=pair.response_text))
+
+    messages.append(Message(role="user", content=body.prompt_text))
+
+    system_prompt = "\n\n".join(system_parts) if system_parts else ""
+    requested_model = body.model or project.default_model or "gemini-2.5-flash"
+
+    # 4. Provider selection (mirrors streaming logic)
+    if body.provider == "fireworks":
+        provider = FireworksProvider(api_key=api_key)
+    elif requested_model and "claude" in requested_model.lower():
+        provider = ClaudeProvider(api_key=api_key)
+    else:
+        provider = GeminiProvider(api_key=api_key)
+
+    try:
+        response = await provider.chat_completion(
+            system=system_prompt,
+            messages=messages,
+            model=requested_model,
+            temperature=body.temperature,
+            top_p=body.top_p,
+            max_output_tokens=body.max_output_tokens,
+            effort=body.effort,
+        )
+    except GeminiSafetyBlockError as exc:
+        await provider.close()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "safety_block",
+                "finish_reason": exc.finish_reason,
+                "safety_ratings": exc.safety_ratings,
+                "message": exc.message,
+            },
+        ) from exc
+    except GeminiAPIError as exc:
+        await provider.close()
+        raise HTTPException(
+            status_code=exc.status_code or status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": "provider_error",
+                "message": exc.message,
+                "provider_error_code": exc.provider_error_code,
+            },
+        ) from exc
+    finally:
+        await provider.close()
+
+    accumulated_content = response.content
+    usage_data = response.usage or {}
+
+    if not accumulated_content.strip():
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="No content generated.")
+
+    # 5. Persist PRPair
+    new_pair = PRPairModel(
+        branch_id=branch_id,
+        prompt_text=body.prompt_text,
+        response_text=accumulated_content,
+        generation_params={
+            "model": requested_model,
+            "temperature": body.temperature,
+            "top_p": body.top_p,
+            "max_output_tokens": body.max_output_tokens,
+            "effort": body.effort,
+        }
+    )
+    db.add(new_pair)
+    await db.flush()
+
+    # Link attachments
+    if body.attachment_ids:
+        for att_id in body.attachment_ids:
+            att_res = await db.execute(select(AttachmentModel).where(AttachmentModel.id == att_id))
+            att = att_res.scalar_one_or_none()
+            if att:
+                att.pair_id = new_pair.id
+
+    # Update cached token count
+    total_tokens = (
+        usage_data.get("total_tokens") or
+        usage_data.get("totalTokenCount") or
+        0
+    )
+    branch.cached_static_token_count = total_tokens if total_tokens else None
+
+    await db.commit()
+    await db.refresh(new_pair)
+
+    return {
+        "type": "done",
+        "node_id": new_pair.id,
+        "full_content": accumulated_content,
+        "created_at": new_pair.created_at.isoformat() if new_pair.created_at else None,
+        "usage": {
+            "promptTokenCount": usage_data.get("prompt_tokens", 0),
+            "candidatesTokenCount": usage_data.get("completion_tokens", 0),
+            "totalTokenCount": total_tokens,
+        },
+    }

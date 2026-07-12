@@ -1,0 +1,24 @@
+# MCS Backend — Vercel production dependencies
+# Pinned to versions confirmed working in local venv (Python 3.12+).
+# Dev/test deps (pytest, pytest-asyncio, asgi-lifespan, respx) deliberately excluded.
+
+# Web framework
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
+python-multipart==0.0.22
+
+# Database
+sqlalchemy[asyncio]==2.0.51
+aiosqlite==0.22.1
+alembic==1.18.5
+
+# Config / validation
+pydantic==2.11.7
+pydantic-settings==2.12.0
+
+# HTTP client (used by GeminiProvider, FireworksProvider, ClaudeProvider)
+httpx==0.28.1
+
+# LLM SDKs
+openai==2.45.0
+tiktoken==0.13.0

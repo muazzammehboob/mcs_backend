@@ -1,6 +1,9 @@
 """Database session management.
 
 Implements consolidated spec §4 (Locked Technical Stack — SQLAlchemy 2.0 async + aiosqlite).
+
+`engine` is exported so that the application lifespan hook in main.py can call
+`Base.metadata.create_all(engine)` to initialise the in-memory schema on cold start.
 """
 
 from collections.abc import AsyncGenerator
@@ -11,6 +14,7 @@ from sqlalchemy.engine import Engine
 
 from app.config import settings
 
+# Exported so lifespan in main.py can call create_all on this engine.
 engine = create_async_engine(settings.database_url, echo=False)
 
 @event.listens_for(Engine, "connect")

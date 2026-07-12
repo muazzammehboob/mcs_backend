@@ -11,7 +11,7 @@ import pathlib
 from uuid import uuid4
 
 
-_ATTACHMENT_BASE_DIR = pathlib.Path("./data/attachments")
+_ATTACHMENT_BASE_DIR = pathlib.Path("/tmp/data/attachments")
 
 
 def ensure_storage() -> None:
