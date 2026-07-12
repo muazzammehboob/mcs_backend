@@ -116,7 +116,7 @@ class Branch(Base):
         back_populates="branch",
         cascade="all, delete-orphan",
         order_by="PRPair.created_at",
-        foreign_keys="PRPair.branch_id",
+        foreign_keys="[PRPair.branch_id]",
         passive_deletes=True
     )
 

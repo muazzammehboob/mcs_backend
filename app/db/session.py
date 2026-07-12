@@ -13,9 +13,15 @@ from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
 from app.config import settings
+from sqlalchemy.pool import StaticPool
+
+engine_kwargs = {"echo": False}
+if ":memory:" in settings.database_url:
+    engine_kwargs["connect_args"] = {"check_same_thread": False}
+    engine_kwargs["poolclass"] = StaticPool
 
 # Exported so lifespan in main.py can call create_all on this engine.
-engine = create_async_engine(settings.database_url, echo=False)
+engine = create_async_engine(settings.database_url, **engine_kwargs)
 
 @event.listens_for(Engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
